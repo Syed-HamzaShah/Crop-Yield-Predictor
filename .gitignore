@@ -1,0 +1,13 @@
+# Local Python environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Dataset directories
+maize/
+wheat/
