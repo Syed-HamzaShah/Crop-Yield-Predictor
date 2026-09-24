@@ -11,3 +11,20 @@ __pycache__/
 # Dataset directories
 maize/
 wheat/
+
+# Web Interface dependencies and build output
+Web Interface/node_modules/
+Web Interface/dist/
+Web Interface/.output/
+Web Interface/.vinxi/
+Web Interface/.tanstack/
+
+# Web Interface local environment files
+Web Interface/.env
+Web Interface/.env.*
+!Web Interface/.env.example
+
+# Local tooling and OS files
+.DS_Store
+Thumbs.db
+*.swp
