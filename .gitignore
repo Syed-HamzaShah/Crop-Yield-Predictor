@@ -12,17 +12,38 @@ __pycache__/
 maize/
 wheat/
 
-# Web Interface dependencies and build output
-Web Interface/node_modules/
-Web Interface/dist/
-Web Interface/.output/
-Web Interface/.vinxi/
-Web Interface/.tanstack/
+# Node.js dependencies and package-manager files
+node_modules/
+.npm/
+.pnpm-store/
+.yarn/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-# Web Interface local environment files
-Web Interface/.env
-Web Interface/.env.*
-!Web Interface/.env.example
+# Node.js and frontend build output
+dist/
+build/
+out/
+coverage/
+.cache/
+.vite/
+.next/
+.nuxt/
+.svelte-kit/
+.turbo/
+.output/
+.vinxi/
+.tanstack/
+
+# Local environment variables
+.env
+.env.*
+!.env.example
+!.env.template
+!.env.local.example
 
 # Local tooling and OS files
 .DS_Store
