@@ -35,6 +35,7 @@ coverage/
 .svelte-kit/
 .turbo/
 .output/
+.vercel/
 .vinxi/
 .tanstack/
 
