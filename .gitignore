@@ -24,20 +24,12 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # Node.js and frontend build output
-dist/
-build/
-out/
 coverage/
 .cache/
-.vite/
 .next/
 .nuxt/
 .svelte-kit/
 .turbo/
-.output/
-.vercel/
-.vinxi/
-.tanstack/
 
 # Local environment variables
 .env
