@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { allVariables, variableKeys } from "./variables";
+import { allVariables, variableKeys, cropOptions, type CropValue } from "./variables";
 
 export type PredictionResult = {
   yield: number;
@@ -7,16 +7,38 @@ export type PredictionResult = {
   confidence: number;
   latencyMs: number;
   modelVersion: string;
+  crop: string;
   drivers: { label: string; value: string }[];
 };
 
-function validate(input: unknown): Record<string, number> {
+// ---------------------------------------------------------------------------
+// API configuration
+// ---------------------------------------------------------------------------
+
+/** Base URL for the Python FastAPI prediction server. */
+const API_BASE =
+  (typeof process !== "undefined" && process.env["PREDICT_API_URL"]) ||
+  "http://localhost:8000";
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+function validate(input: unknown): { features: Record<string, number>; crop: CropValue } {
   if (typeof input !== "object" || input === null) {
     throw new Error("Prediction inputs are missing.");
   }
   const raw = input as Record<string, unknown>;
-  const out: Record<string, number> = {};
 
+  // Validate crop
+  const crop = raw["crop"] as string;
+  const validCrops = cropOptions.map((c) => c.value);
+  if (!crop || !validCrops.includes(crop as CropValue)) {
+    throw new Error(`Crop must be one of: ${validCrops.join(", ")}.`);
+  }
+
+  // Validate numeric features
+  const out: Record<string, number> = {};
   for (const spec of allVariables) {
     const value = raw[spec.key];
     const num = typeof value === "string" ? Number(value) : value;
@@ -30,93 +52,65 @@ function validate(input: unknown): Record<string, number> {
     }
     out[spec.key] = num;
   }
-  return out;
+  return { features: out, crop: crop as CropValue };
 }
 
-const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
-/** Bell-shaped response: 1 at the optimum, falling off with width. */
-const optimum = (v: number, opt: number, width: number) =>
-  Math.exp(-1 * (((v - opt) / width) ** 2));
-
-function score(v: Record<string, number>) {
-  // Light capture drives potential biomass.
-  const canopy = 0.55 * v['ndvi_mean']! + 0.45 * v['fpar_mean']!;
-  const radiation = clamp(v['rad_mean']! / 450, 0.35, 1.15);
-  const potential = 15.5 * canopy * radiation;
-
-  // Thermal suitability.
-  const thermal =
-    optimum(v['tavg_mean']!, 18.5, 8) *
-    (1 - 0.35 * clamp((v['tmax_max']! - 32) / 14, 0, 1)) *
-    (1 - 0.25 * clamp((-2 - v['tmin_min']!) / 14, 0, 1)) *
-    (1 - 0.18 * clamp((v['tavg_std']! - 4) / 10, 0, 1));
-
-  // Water supply vs demand.
-  const water =
-    optimum(v['prec_sum']!, 680, 420) *
-    (1 - 0.3 * clamp((v['vpd_mean']! - 1.2) / 3.5, 0, 1)) *
-    (1 + 0.12 * clamp(v['cwb_sum']! / 400, -1, 1)) *
-    (1 - 0.18 * clamp((v['prec_max']! - 120) / 180, 0, 1)) *
-    (1 - 0.12 * clamp((v['prec_std']! - 40) / 140, 0, 1)) *
-    (1 - 0.12 * clamp((v['et0_mean']! - 70) / 120, 0, 1));
-
-  // Soil capacity to store and deliver water.
-  const soil =
-    (0.65 + 0.35 * clamp(v['awc']! / 28, 0, 1.2)) *
-    optimum(v['bulk_density']!, 1.32, 0.42) *
-    (1 - 0.06 * (v['drainage_class']! - 2)) *
-    optimum(v['rsm_mean']!, 34, 22) *
-    optimum(v['ssm_mean']!, 30, 26);
-
-  // Season-long instability penalties.
-  const stability =
-    1 -
-    0.22 * clamp(v['ndvi_std']! / 0.35, 0, 1) -
-    0.14 * clamp(v['fpar_std']! / 0.35, 0, 1) -
-    0.1 * clamp(v['rsm_std']! / 20, 0, 1) -
-    0.08 * clamp(v['ssm_std']! / 22, 0, 1) -
-    0.08 * clamp(v['rad_std']! / 220, 0, 1);
-
-  // Mild latitude and regional-scale adjustment.
-  const geo =
-    optimum(Math.abs(v['latitude']!), 42, 34) *
-    (1 - 0.05 * clamp((v['region_area']! - 2500) / 2500, 0, 1));
-
-  const raw =
-    potential *
-    clamp(thermal, 0.05, 1.2) *
-    clamp(water, 0.05, 1.25) *
-    clamp(soil, 0.1, 1.25) *
-    clamp(stability, 0.3, 1) *
-    clamp(geo, 0.4, 1.05);
-
-  const yieldValue = clamp(raw, 0.2, 14);
-
-  const agreement =
-    (clamp(thermal, 0, 1) + clamp(water, 0, 1) + clamp(soil, 0, 1) + clamp(stability, 0, 1)) / 4;
-  const confidence = Math.round(clamp(58 + 40 * agreement, 45, 97));
-
-  return { yieldValue, confidence };
-}
+// ---------------------------------------------------------------------------
+// Server function — calls the Python FastAPI backend
+// ---------------------------------------------------------------------------
 
 export const predictYield = createServerFn({ method: "POST" })
-  .inputValidator(validate)
+  .inputValidator((raw: unknown) => {
+    const { features, crop } = validate(raw);
+    return { features, crop };
+  })
   .handler(async ({ data }): Promise<PredictionResult> => {
-    const startedAt = Date.now();
-    const { yieldValue, confidence } = score(data);
+    const { features, crop } = data;
+
+    const payload = { crop, ...features };
+
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE}/predict`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch {
+      throw new Error(
+        "Cannot reach the prediction server. Make sure the Python API is running on port 8000.",
+      );
+    }
+
+    if (!response.ok) {
+      let detail = `API error ${response.status}`;
+      try {
+        const body = (await response.json()) as { detail?: string };
+        if (body.detail) detail = String(body.detail);
+      } catch {
+        /* ignore */
+      }
+      throw new Error(detail);
+    }
+
+    const body = (await response.json()) as {
+      yield_value: number;
+      unit: string;
+      confidence: number;
+      latency_ms: number;
+      model_version: string;
+      crop: string;
+      drivers: { label: string; value: string }[];
+    };
 
     return {
-      yield: Math.round(yieldValue * 100) / 100,
-      unit: "t/ha",
-      confidence,
-      latencyMs: Math.max(1, Date.now() - startedAt),
-      modelVersion: "agronomic-v2.4",
-      drivers: [
-        { label: "Mean temperature", value: `${data['tavg_mean']} °C` },
-        { label: "Total precipitation", value: `${data['prec_sum']} mm` },
-        { label: "Root-zone moisture", value: `${data['rsm_mean']} %` },
-        { label: "NDVI mean", value: `${data['ndvi_mean']}` },
-      ],
+      yield: body.yield_value,
+      unit: body.unit,
+      confidence: body.confidence,
+      latencyMs: body.latency_ms,
+      modelVersion: body.model_version,
+      crop: body.crop,
+      drivers: body.drivers,
     };
   });
 
